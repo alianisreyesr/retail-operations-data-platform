@@ -1,7 +1,5 @@
 # Retail Operations Data Platform
 
-[![CI](https://github.com/alianisreyesr/retail-operations-data-platform/actions/workflows/ci.yml/badge.svg)](https://github.com/alianisreyesr/retail-operations-data-platform/actions/workflows/ci.yml)
-[![CodeQL](https://github.com/alianisreyesr/retail-operations-data-platform/actions/workflows/codeql.yml/badge.svg)](https://github.com/alianisreyesr/retail-operations-data-platform/actions/workflows/codeql.yml)
 ![Python](https://img.shields.io/badge/Python-3.11-3776AB?style=flat-square&logo=python&logoColor=white)
 ![DuckDB](https://img.shields.io/badge/DuckDB-analytics-FFF000?style=flat-square&logo=duckdb&logoColor=black)
 ![License](https://img.shields.io/badge/License-MIT-2E7D32?style=flat-square)
