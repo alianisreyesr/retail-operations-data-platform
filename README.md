@@ -12,6 +12,12 @@ A production-minded analytics pipeline that converts synthetic retail orders int
 
 > **Data boundary:** Every customer, product, order, and location is fictional. This portfolio project contains no employer, payment, personal, or production data.
 
+## Portfolio preview
+
+![Synthetic retail operations dashboard with revenue, margin, store performance, and inventory action queue](docs/assets/operations-dashboard.png)
+
+The dashboard is generated from the DuckDB decision views; it is not a manually maintained mockup.
+
 ## Business outcome
 
 Retail operations teams need one trustworthy view of revenue, demand, inventory pressure, and fulfillment performance. This project demonstrates how raw operational files become quality-checked analytical tables rather than an unreviewed dashboard export.
@@ -29,9 +35,11 @@ Retail operations teams need one trustworthy view of revenue, demand, inventory 
 - Explicit schema and domain validation before loading
 - DuckDB raw, dimension, and fact tables
 - Revenue, margin, fulfillment, and low-stock metrics
+- Store-performance and inventory reorder decision views
 - Reject records with human-readable quality reasons
 - Source-to-target reconciliation and automated tests
-- Reproducible CLI execution and CI quality gates
+- Self-contained HTML and JSON evidence exports
+- Reproducible CLI execution and CI-ready quality gates
 
 ## Architecture
 
@@ -54,6 +62,7 @@ python -m venv .venv
 source .venv/bin/activate
 python -m pip install -r requirements.txt
 python -m retail_ops.pipeline --input data/orders.csv --database retail_ops.duckdb
+python -m retail_ops.report --database retail_ops.duckdb --output reports/operations-dashboard.html
 python -m pytest
 ```
 
@@ -61,6 +70,7 @@ Expected pipeline summary:
 
 ```text
 accepted=8 rejected=2 gross_revenue=1666.00 gross_margin=698.50
+dashboard=reports/operations-dashboard.html stores=3 reorder_items=3
 ```
 
 ## Repository structure

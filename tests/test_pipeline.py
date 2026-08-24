@@ -4,6 +4,7 @@ from pathlib import Path
 import duckdb
 
 from retail_ops.pipeline import run, validate
+from retail_ops.report import export_dashboard
 
 
 def test_validate_explains_invalid_values():
@@ -26,3 +27,16 @@ def test_pipeline_reconciles_and_builds_kpis(tmp_path: Path):
         assert connection.execute("SELECT low_stock_lines FROM operations_kpis").fetchone()[0] == 4
     finally:
         connection.close()
+
+
+def test_decision_views_and_dashboard_are_exportable(tmp_path: Path):
+    source = Path(__file__).parents[1] / "data" / "orders.csv"
+    database = tmp_path / "retail.duckdb"
+    dashboard = tmp_path / "dashboard.html"
+    run(source, database)
+    payload = export_dashboard(database, dashboard)
+    assert payload["metrics"]["orders"] == 8
+    assert len(payload["stores"]) == 3
+    assert len(payload["reorder_queue"]) == 3
+    assert "Retail Operations Dashboard" in dashboard.read_text()
+    assert dashboard.with_suffix(".json").exists()

@@ -114,6 +114,37 @@ def run(input_path: Path, database_path: Path) -> PipelineSummary:
             FROM fact_orders
             """
         )
+        connection.execute(
+            """
+            CREATE OR REPLACE VIEW store_performance AS
+            SELECT
+              store_id,
+              COUNT(DISTINCT order_id) AS orders,
+              SUM(quantity) AS units,
+              SUM(quantity * unit_price) AS revenue,
+              SUM(quantity * (unit_price - unit_cost)) AS margin,
+              ROUND(AVG(fulfillment_days), 2) AS average_fulfillment_days
+            FROM fact_orders
+            GROUP BY store_id
+            ORDER BY revenue DESC
+            """
+        )
+        connection.execute(
+            """
+            CREATE OR REPLACE VIEW reorder_queue AS
+            SELECT
+              product_id,
+              category,
+              MIN(inventory_on_hand) AS inventory_on_hand,
+              MAX(reorder_level) AS reorder_level,
+              SUM(quantity) AS recent_units,
+              MAX(reorder_level) - MIN(inventory_on_hand) AS stock_gap
+            FROM fact_orders
+            GROUP BY product_id, category
+            HAVING MIN(inventory_on_hand) <= MAX(reorder_level)
+            ORDER BY stock_gap DESC, recent_units DESC
+            """
+        )
         revenue, margin = connection.execute(
             "SELECT COALESCE(SUM(quantity * unit_price), 0), COALESCE(SUM(quantity * (unit_price-unit_cost)), 0) FROM fact_orders"
         ).fetchone()
