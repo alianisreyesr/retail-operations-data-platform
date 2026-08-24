@@ -2,6 +2,7 @@
 
 ![Python](https://img.shields.io/badge/Python-3.11-3776AB?style=flat-square&logo=python&logoColor=white)
 ![DuckDB](https://img.shields.io/badge/DuckDB-analytics-FFF000?style=flat-square&logo=duckdb&logoColor=black)
+![Streamlit](https://img.shields.io/badge/Streamlit-dashboard-FF4B4B?style=flat-square&logo=streamlit&logoColor=white)
 ![License](https://img.shields.io/badge/License-MIT-2E7D32?style=flat-square)
 
 **Data Engineering · Analytics Engineering · Retail Operations · Decision Support**
@@ -38,7 +39,7 @@ Retail operations teams need one trustworthy view of revenue, demand, inventory 
 - Store-performance and inventory reorder decision views
 - Reject records with human-readable quality reasons
 - Source-to-target reconciliation and automated tests
-- Self-contained HTML and JSON evidence exports
+- Interactive Streamlit dashboard plus self-contained HTML and JSON evidence exports
 - Reproducible CLI execution and CI-ready quality gates
 
 ## Architecture
@@ -50,7 +51,8 @@ flowchart LR
   B -->|rejected| D["Quality reject evidence"]
   C --> E["Dimensions and order fact"]
   E --> F["Operations KPI mart"]
-  F --> G["BI / analyst consumers"]
+  F --> G["Python / Streamlit dashboard"]
+  F --> H["HTML and JSON evidence exports"]
 ```
 
 See the [architecture notes](docs/ARCHITECTURE.md) for design decisions and production extensions.
@@ -61,8 +63,10 @@ See the [architecture notes](docs/ARCHITECTURE.md) for design decisions and prod
 python -m venv .venv
 source .venv/bin/activate
 python -m pip install -r requirements.txt
+python -m pip install -e .
 python -m retail_ops.pipeline --input data/orders.csv --database retail_ops.duckdb
 python -m retail_ops.report --database retail_ops.duckdb --output reports/operations-dashboard.html
+streamlit run dashboard.py
 python -m pytest
 ```
 
@@ -75,12 +79,15 @@ dashboard=reports/operations-dashboard.html stores=3 reorder_items=3
 
 ## Repository structure
 
-```text
-src/retail_ops/        pipeline and business rules
-data/                  synthetic demonstration input
-tests/                 unit and integration tests
-docs/                  architecture and business case study
-.github/                CI, CodeQL, Dependabot, issue templates
+```mermaid
+flowchart TB
+  R["retail-operations-data-platform"]
+  R --> D["dashboard.py — interactive Python dashboard"]
+  R --> S["src/retail_ops — pipeline, rules, and report export"]
+  R --> A["data — synthetic demonstration input"]
+  R --> T["tests — unit and integration tests"]
+  R --> O["docs — architecture and business case study"]
+  R --> G[".github — automation and contribution templates"]
 ```
 
 ## Engineering boundary

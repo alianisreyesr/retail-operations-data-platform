@@ -21,7 +21,7 @@ Order, inventory, and fulfillment extracts often arrive as operational files wit
 
 ## Verified result
 
-The bundled synthetic batch contains ten source rows: eight accepted and two rejected. Three automated tests verify reconciliation, revenue, margin, low-stock logic, decision views, reject persistence, and HTML/JSON dashboard export. The generated dashboard reports three store performance records and three inventory action items.
+The bundled synthetic batch contains ten source rows: eight accepted and two rejected. Four automated tests verify reconciliation, revenue, margin, low-stock logic, decision views, reject persistence, HTML/JSON export, and the interactive Streamlit dashboard. The generated dashboard reports three store performance records and three inventory action items.
 
 ## Limitations and next production steps
 
