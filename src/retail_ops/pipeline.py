@@ -6,6 +6,7 @@ import argparse
 import csv
 import hashlib
 from dataclasses import dataclass
+from datetime import date
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
@@ -43,6 +44,14 @@ def validate(row: dict[str, str]) -> list[str]:
     reasons: list[str] = []
     if not row.get("order_id", "").strip():
         reasons.append("missing_order_id")
+    # order_date is cast to SQL DATE on insert (see run()); an unvalidated
+    # malformed value (empty, "07/01/2026", garbage) used to reach that
+    # cast and raise inside the single executemany() for the whole batch,
+    # aborting every row instead of just this one.
+    try:
+        date.fromisoformat(row.get("order_date", "").strip())
+    except ValueError:
+        reasons.append("invalid_order_date")
     for field in ("quantity", "inventory_on_hand", "reorder_level", "fulfillment_days"):
         try:
             if int(row[field]) < 0:
@@ -80,11 +89,19 @@ def run(input_path: Path, database_path: Path) -> PipelineSummary:
     try:
         connection.execute("CREATE TABLE IF NOT EXISTS quality_rejects(batch_id VARCHAR, order_id VARCHAR, reasons VARCHAR)")
         connection.execute("DELETE FROM quality_rejects WHERE batch_id = ?", [batch_id])
-        connection.executemany("INSERT INTO quality_rejects VALUES (?, ?, ?)", [(batch_id, *item) for item in rejected])
-        connection.execute("DROP TABLE IF EXISTS fact_orders")
+        if rejected:
+            # Same empty-list restriction as the fact_orders insert below —
+            # a batch with zero rejected rows must not call executemany([]).
+            connection.executemany("INSERT INTO quality_rejects VALUES (?, ?, ?)", [(batch_id, *item) for item in rejected])
+        # fact_orders is append-by-batch, not drop-and-replace: re-running
+        # the same input file replaces only that batch's rows (idempotent),
+        # while a new input file's rows accumulate alongside prior batches
+        # instead of erasing them. This is what "deterministic batch
+        # identifiers" is for — DROP TABLE defeated the point of stamping
+        # every row with one.
         connection.execute(
             """
-            CREATE TABLE fact_orders(
+            CREATE TABLE IF NOT EXISTS fact_orders(
               batch_id VARCHAR, order_id VARCHAR, order_date DATE, store_id VARCHAR,
               product_id VARCHAR, category VARCHAR, quantity INTEGER,
               unit_price DECIMAL(12,2), unit_cost DECIMAL(12,2),
@@ -92,6 +109,7 @@ def run(input_path: Path, database_path: Path) -> PipelineSummary:
             )
             """
         )
+        connection.execute("DELETE FROM fact_orders WHERE batch_id = ?", [batch_id])
         values = [
             (
                 batch_id,
@@ -101,16 +119,21 @@ def run(input_path: Path, database_path: Path) -> PipelineSummary:
             )
             for row in accepted
         ]
-        connection.executemany("INSERT INTO fact_orders VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", values)
+        if values:
+            # DuckDB's executemany rejects an empty parameter-set list, so a
+            # batch where every row failed validation (accepted == []) must
+            # not attempt one — the DELETE above already clears any prior
+            # rows for this batch_id.
+            connection.executemany("INSERT INTO fact_orders VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", values)
         connection.execute(
             """
             CREATE OR REPLACE VIEW operations_kpis AS
             SELECT
               COUNT(DISTINCT order_id) AS order_count,
-              SUM(quantity * unit_price) AS gross_revenue,
-              SUM(quantity * (unit_price - unit_cost)) AS gross_margin,
+              COALESCE(SUM(quantity * unit_price), 0) AS gross_revenue,
+              COALESCE(SUM(quantity * (unit_price - unit_cost)), 0) AS gross_margin,
               COUNT(*) FILTER (WHERE inventory_on_hand <= reorder_level) AS low_stock_lines,
-              ROUND(AVG(fulfillment_days), 2) AS average_fulfillment_days
+              COALESCE(ROUND(AVG(fulfillment_days), 2), 0) AS average_fulfillment_days
             FROM fact_orders
             """
         )
@@ -132,16 +155,37 @@ def run(input_path: Path, database_path: Path) -> PipelineSummary:
         connection.execute(
             """
             CREATE OR REPLACE VIEW reorder_queue AS
+            -- Grouped per store, not blended across stores: taking
+            -- MIN/MAX(inventory_on_hand) across different stores' independent
+            -- stock levels produced a "stock_gap" that matched neither
+            -- store's actual position for a SKU sold at more than one store.
+            -- inventory_on_hand/reorder_level are snapshots recorded on each
+            -- order line, so the most recent order per (store, product) is
+            -- used as that store's current position.
+            WITH latest_snapshot AS (
+              SELECT
+                store_id, product_id, category, inventory_on_hand, reorder_level,
+                ROW_NUMBER() OVER (
+                  PARTITION BY store_id, product_id ORDER BY order_date DESC
+                ) AS recency_rank
+              FROM fact_orders
+            ),
+            units AS (
+              SELECT store_id, product_id, SUM(quantity) AS recent_units
+              FROM fact_orders
+              GROUP BY store_id, product_id
+            )
             SELECT
-              product_id,
-              category,
-              MIN(inventory_on_hand) AS inventory_on_hand,
-              MAX(reorder_level) AS reorder_level,
-              SUM(quantity) AS recent_units,
-              MAX(reorder_level) - MIN(inventory_on_hand) AS stock_gap
-            FROM fact_orders
-            GROUP BY product_id, category
-            HAVING MIN(inventory_on_hand) <= MAX(reorder_level)
+              s.store_id,
+              s.product_id,
+              s.category,
+              s.inventory_on_hand,
+              s.reorder_level,
+              u.recent_units,
+              s.reorder_level - s.inventory_on_hand AS stock_gap
+            FROM latest_snapshot s
+            JOIN units u ON u.store_id = s.store_id AND u.product_id = s.product_id
+            WHERE s.recency_rank = 1 AND s.inventory_on_hand <= s.reorder_level
             ORDER BY stock_gap DESC, recent_units DESC
             """
         )

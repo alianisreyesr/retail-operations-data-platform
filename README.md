@@ -76,7 +76,7 @@ Expected pipeline summary:
 
 ```text
 accepted=8 rejected=2 gross_revenue=1666.00 gross_margin=698.50
-dashboard=reports/operations-dashboard.html stores=3 reorder_items=3
+dashboard=reports/operations-dashboard.html stores=3 reorder_items=4
 ```
 
 ## Repository structure

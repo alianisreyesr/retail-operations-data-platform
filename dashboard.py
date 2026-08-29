@@ -37,7 +37,7 @@ def load_dashboard_data(database_path: str) -> tuple[dict[str, float | int], pd.
             "FROM store_performance ORDER BY revenue DESC"
         ).fetchdf()
         reorder = connection.execute(
-            "SELECT product_id, category, inventory_on_hand, reorder_level, recent_units, stock_gap "
+            "SELECT store_id, product_id, category, inventory_on_hand, reorder_level, recent_units, stock_gap "
             "FROM reorder_queue ORDER BY stock_gap DESC, recent_units DESC"
         ).fetchdf()
         rejected = connection.execute("SELECT COUNT(*) FROM quality_rejects").fetchone()[0]
@@ -85,25 +85,29 @@ def main() -> None:
     )
 
     st.subheader("Inventory action queue")
-    category = st.multiselect(
-        "Category",
-        sorted(reorder["category"].unique()),
-        default=sorted(reorder["category"].unique()),
-    )
-    filtered = reorder[reorder["category"].isin(category)]
-    st.dataframe(
-        filtered,
-        width="stretch",
-        hide_index=True,
-        column_config={
-            "stock_gap": st.column_config.ProgressColumn(
-                "Stock gap",
-                min_value=0,
-                max_value=max(int(reorder["stock_gap"].max()), 1),
-                format="%d",
-            )
-        },
-    )
+    if reorder.empty:
+        st.info("No SKUs are currently at or below their reorder level.")
+    else:
+        category = st.multiselect(
+            "Category",
+            sorted(reorder["category"].unique()),
+            default=sorted(reorder["category"].unique()),
+        )
+        filtered = reorder[reorder["category"].isin(category)]
+        st.dataframe(
+            filtered,
+            width="stretch",
+            hide_index=True,
+            column_config={
+                "stock_gap": st.column_config.ProgressColumn(
+                    "Stock gap",
+                    min_value=0,
+                    # reorder is non-empty here, so .max() can't be NaN.
+                    max_value=max(int(reorder["stock_gap"].max()), 1),
+                    format="%d",
+                )
+            },
+        )
 
     with st.expander("Data quality boundary"):
         st.write(
