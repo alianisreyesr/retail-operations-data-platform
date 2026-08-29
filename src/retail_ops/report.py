@@ -24,7 +24,7 @@ def export_dashboard(database_path: Path, output_path: Path) -> dict[str, object
             "SELECT store_id, orders, units, revenue, margin, average_fulfillment_days FROM store_performance"
         ).fetchall()
         reorder = connection.execute(
-            "SELECT product_id, category, inventory_on_hand, reorder_level, recent_units, stock_gap FROM reorder_queue"
+            "SELECT store_id, product_id, category, inventory_on_hand, reorder_level, recent_units, stock_gap FROM reorder_queue"
         ).fetchall()
         rejected = connection.execute("SELECT COUNT(*) FROM quality_rejects").fetchone()[0]
     finally:
@@ -43,8 +43,8 @@ def export_dashboard(database_path: Path, output_path: Path) -> dict[str, object
         for store, orders, units, revenue, margin, days in stores
     )
     reorder_rows = "".join(
-        f"<tr><td>{html.escape(product)}</td><td>{html.escape(category)}</td><td>{inventory}</td><td>{level}</td><td>{units}</td><td><span class='risk'>Reorder</span></td></tr>"
-        for product, category, inventory, level, units, _gap in reorder
+        f"<tr><td>{html.escape(store)}</td><td>{html.escape(product)}</td><td>{html.escape(category)}</td><td>{inventory}</td><td>{level}</td><td>{units}</td><td><span class='risk'>Reorder</span></td></tr>"
+        for store, product, category, inventory, level, units, _gap in reorder
     )
     payload = {"metrics": metrics, "stores": [list(row) for row in stores], "reorder_queue": [list(row) for row in reorder]}
     dashboard = f"""<!doctype html>
@@ -72,7 +72,7 @@ table{{width:100%;border-collapse:collapse}} th{{text-align:left;color:var(--mut
 <div class="card"><div class="label">Avg fulfillment</div><div class="value">{metrics['average_fulfillment_days']:.2f}d</div></div>
 <div class="card"><div class="label">Rejected records</div><div class="value">{metrics['rejected_records']}</div></div>
 </section><section class="panels"><article class="panel"><h2>Store performance</h2><table><thead><tr><th>Store</th><th>Orders</th><th>Units</th><th>Revenue</th><th>Margin</th><th>Fulfillment</th></tr></thead><tbody>{store_rows}</tbody></table></article>
-<article class="panel"><h2>Inventory action queue</h2><table><thead><tr><th>Product</th><th>Category</th><th>On hand</th><th>Level</th><th>Units</th><th>Action</th></tr></thead><tbody>{reorder_rows}</tbody></table></article></section>
+<article class="panel"><h2>Inventory action queue</h2><table><thead><tr><th>Store</th><th>Product</th><th>Category</th><th>On hand</th><th>Level</th><th>Units</th><th>Action</th></tr></thead><tbody>{reorder_rows}</tbody></table></article></section>
 <footer>All records are fictional. This dashboard is generated evidence from a portfolio pipeline, not a production retail system.</footer>
 </main></body></html>"""
     output_path.parent.mkdir(parents=True, exist_ok=True)
