@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import csv
 import hashlib
+from collections import Counter
 from dataclasses import dataclass
 from datetime import date
 from decimal import Decimal, InvalidOperation
@@ -40,16 +41,29 @@ def _batch_id(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()[:16]
 
 
-def validate(row: dict[str, str]) -> list[str]:
+def _text(row: dict[str, str | None], field: str) -> str:
+    # csv.DictReader fills fields missing from a short (truncated) row with
+    # None, so every read goes through here instead of calling str methods.
+    value = row.get(field)
+    return value.strip() if isinstance(value, str) else ""
+
+
+def validate(row: dict[str, str | None]) -> list[str]:
     reasons: list[str] = []
-    if not row.get("order_id", "").strip():
+    if None in row:
+        # Extra cells beyond the header are collected under the None key.
+        reasons.append("malformed_row")
+    if not _text(row, "order_id"):
         reasons.append("missing_order_id")
+    for field in ("store_id", "product_id", "category"):
+        if not _text(row, field):
+            reasons.append(f"missing_{field}")
     # order_date is cast to SQL DATE on insert (see run()); an unvalidated
     # malformed value (empty, "07/01/2026", garbage) used to reach that
     # cast and raise inside the single executemany() for the whole batch,
     # aborting every row instead of just this one.
     try:
-        date.fromisoformat(row.get("order_date", "").strip())
+        date.fromisoformat(_text(row, "order_date"))
     except ValueError:
         reasons.append("invalid_order_date")
     for field in ("quantity", "inventory_on_hand", "reorder_level", "fulfillment_days"):
@@ -62,7 +76,7 @@ def validate(row: dict[str, str]) -> list[str]:
         try:
             if Decimal(row[field]) < 0:
                 reasons.append(f"negative_{field}")
-        except (KeyError, InvalidOperation):
+        except (KeyError, TypeError, InvalidOperation):
             reasons.append(f"invalid_{field}")
     return reasons
 
@@ -78,27 +92,35 @@ def run(input_path: Path, database_path: Path) -> PipelineSummary:
 
     accepted: list[dict[str, str]] = []
     rejected: list[tuple[str, str]] = []
+    # order_id is the natural key: an id repeated inside one file is
+    # ambiguous (which line is right?), so every occurrence is rejected.
+    id_counts = Counter(_text(row, "order_id") for row in rows)
     for row in rows:
         reasons = validate(row)
+        order_id = _text(row, "order_id")
+        if order_id and id_counts[order_id] > 1:
+            reasons.append("duplicate_order_id")
         if reasons:
-            rejected.append((row.get("order_id", ""), ",".join(reasons)))
+            rejected.append((order_id, ",".join(reasons)))
         else:
             accepted.append(row)
 
     connection = duckdb.connect(str(database_path))
     try:
+        # One transaction: a failure mid-run rolls back every change, so
+        # fact_orders / quality_rejects are never left half-written.
+        connection.begin()
         connection.execute("CREATE TABLE IF NOT EXISTS quality_rejects(batch_id VARCHAR, order_id VARCHAR, reasons VARCHAR)")
         connection.execute("DELETE FROM quality_rejects WHERE batch_id = ?", [batch_id])
         if rejected:
             # Same empty-list restriction as the fact_orders insert below —
             # a batch with zero rejected rows must not call executemany([]).
             connection.executemany("INSERT INTO quality_rejects VALUES (?, ?, ?)", [(batch_id, *item) for item in rejected])
-        # fact_orders is append-by-batch, not drop-and-replace: re-running
-        # the same input file replaces only that batch's rows (idempotent),
-        # while a new input file's rows accumulate alongside prior batches
-        # instead of erasing them. This is what "deterministic batch
-        # identifiers" is for — DROP TABLE defeated the point of stamping
-        # every row with one.
+        # fact_orders is keyed by the natural key order_id, not by file:
+        # an order that appears again in a later (overlapping, corrected or
+        # extended) file replaces its previous row instead of duplicating
+        # it, while orders absent from the new file are kept. batch_id
+        # (file hash) is only lineage: which file last wrote the row.
         connection.execute(
             """
             CREATE TABLE IF NOT EXISTS fact_orders(
@@ -109,17 +131,18 @@ def run(input_path: Path, database_path: Path) -> PipelineSummary:
             )
             """
         )
-        connection.execute("DELETE FROM fact_orders WHERE batch_id = ?", [batch_id])
         values = [
             (
                 batch_id,
-                row["order_id"], row["order_date"], row["store_id"], row["product_id"], row["category"],
+                row["order_id"].strip(), row["order_date"].strip(), row["store_id"].strip(),
+                row["product_id"].strip(), row["category"].strip(),
                 int(row["quantity"]), Decimal(row["unit_price"]), Decimal(row["unit_cost"]),
                 int(row["inventory_on_hand"]), int(row["reorder_level"]), int(row["fulfillment_days"]),
             )
             for row in accepted
         ]
         if values:
+            connection.executemany("DELETE FROM fact_orders WHERE order_id = ?", [(v[1],) for v in values])
             # DuckDB's executemany rejects an empty parameter-set list, so a
             # batch where every row failed validation (accepted == []) must
             # not attempt one — the DELETE above already clears any prior
@@ -192,6 +215,10 @@ def run(input_path: Path, database_path: Path) -> PipelineSummary:
         revenue, margin = connection.execute(
             "SELECT COALESCE(SUM(quantity * unit_price), 0), COALESCE(SUM(quantity * (unit_price-unit_cost)), 0) FROM fact_orders"
         ).fetchone()
+        connection.commit()
+    except BaseException:
+        connection.rollback()
+        raise
     finally:
         connection.close()
     return PipelineSummary(len(accepted), len(rejected), Decimal(str(revenue)), Decimal(str(margin)))

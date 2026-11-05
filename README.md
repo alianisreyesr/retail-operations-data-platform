@@ -34,13 +34,13 @@ Retail operations teams need one trustworthy view of revenue, demand, inventory 
 
 ## What it demonstrates
 
-- Incremental-style ingestion with deterministic batch identifiers
-- Explicit schema and domain validation before loading
-- DuckDB raw, dimension, and fact tables
+- Idempotent ingestion keyed on `order_id`: overlapping or re-sent files update orders instead of duplicating them, with a file-hash batch identifier kept as lineage
+- Explicit schema and domain validation before loading (missing keys, duplicate `order_id`, truncated rows are rejected with reasons); each run is one transaction
+- DuckDB `fact_orders` and `quality_rejects` tables with KPI, store and reorder views
 - Revenue, margin, fulfillment, and low-stock metrics
 - Store-performance and inventory reorder decision views
 - Reject records with human-readable quality reasons
-- Source-to-target reconciliation and automated tests
+- Run summary (accepted/rejected counts, revenue, margin) and automated tests
 - Interactive Streamlit dashboard plus self-contained HTML and JSON evidence exports
 - Reproducible CLI execution and CI-ready quality gates
 
@@ -49,10 +49,9 @@ Retail operations teams need one trustworthy view of revenue, demand, inventory 
 ```mermaid
 flowchart LR
   A["Synthetic CSV sources"] --> B["Validation and batch controls"]
-  B -->|accepted| C["DuckDB raw layer"]
+  B -->|accepted| C["DuckDB fact_orders"]
   B -->|rejected| D["Quality reject evidence"]
-  C --> E["Dimensions and order fact"]
-  E --> F["Operations KPI mart"]
+  C --> F["KPI, store and reorder views"]
   F --> G["Python / Streamlit dashboard"]
   F --> H["HTML and JSON evidence exports"]
 ```

@@ -14,14 +14,14 @@ Order, inventory, and fulfillment extracts often arrive as operational files wit
 ## Technical decisions
 
 1. Validate before loading so rejected records never silently enter KPIs.
-2. Generate a deterministic batch identifier from source content for reproducibility.
+2. Use `order_id` as the natural key so overlapping files never duplicate orders; keep a content-hash batch identifier for lineage.
 3. Preserve rejection reasons as queryable evidence.
-4. Separate raw operational fields from the KPI consumption view.
+4. Separate the order fact table from the KPI consumption views.
 5. Use decimal arithmetic for business calculations.
 
 ## Verified result
 
-The bundled synthetic batch contains ten source rows: eight accepted and two rejected. Four automated tests verify reconciliation, revenue, margin, low-stock logic, decision views, reject persistence, HTML/JSON export, and the interactive Streamlit dashboard. The generated dashboard reports three store performance records and three inventory action items.
+The bundled synthetic batch contains ten source rows: eight accepted and two rejected. The automated test suite (see `tests/`) verifies reconciliation, revenue, margin, low-stock logic, decision views, reject persistence, HTML/JSON export, and the interactive Streamlit dashboard. The generated dashboard reports three store performance records and four inventory action items.
 
 ## Limitations and next production steps
 
