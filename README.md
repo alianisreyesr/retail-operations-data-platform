@@ -63,12 +63,13 @@ See the [architecture notes](docs/ARCHITECTURE.md) for design decisions and prod
 ```bash
 python -m venv .venv
 source .venv/bin/activate
-python -m pip install -r requirements.txt
+python -m pip install -r requirements-dev.txt   # runtime + pytest, ruff, mypy
 python -m pip install -e .
 python -m retail_ops.pipeline --input data/orders.csv --database retail_ops.duckdb
 python -m retail_ops.report --database retail_ops.duckdb --output reports/operations-dashboard.html
 streamlit run dashboard.py
-python -m pytest
+python -m pytest --cov
+ruff check . && mypy
 ```
 
 Expected pipeline summary:
@@ -77,6 +78,14 @@ Expected pipeline summary:
 accepted=8 rejected=2 gross_revenue=1666.00 gross_margin=698.50
 dashboard=reports/operations-dashboard.html stores=3 reorder_items=4
 ```
+
+### Docker
+
+```bash
+docker compose up --build   # dashboard on http://localhost:8501
+```
+
+The image runs as a non-root user and has a health check. The DuckDB file is stored on the `retail_db` named volume (`RETAIL_OPS_DATABASE=/app/db/retail_ops.duckdb`), so it survives container re-creation; `./data` is mounted read-only. Delete the volume (`docker compose down -v`) to rebuild the demonstration database from `data/orders.csv`.
 
 ## Repository structure
 

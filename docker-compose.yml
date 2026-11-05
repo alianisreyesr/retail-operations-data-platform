@@ -4,4 +4,8 @@ services:
     ports:
       - "8501:8501"
     volumes:
-      - ./data:/app/data
+      - ./data:/app/data:ro
+      - retail_db:/app/db
+
+volumes:
+  retail_db:

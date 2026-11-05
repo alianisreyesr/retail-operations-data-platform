@@ -1,11 +1,20 @@
 import csv
 from decimal import Decimal
 from pathlib import Path
+from typing import Any
 
 import duckdb
+import pytest
 
+from retail_ops import pipeline
 from retail_ops.pipeline import run, validate
 from retail_ops.report import export_dashboard
+
+
+def _one(connection: duckdb.DuckDBPyConnection, sql: str) -> tuple[Any, ...]:
+    row = connection.execute(sql).fetchone()
+    assert row is not None
+    return row
 
 
 def test_validate_explains_invalid_values():
@@ -55,9 +64,9 @@ def test_pipeline_reconciles_and_builds_kpis(tmp_path: Path):
     assert summary.gross_margin == Decimal("698.50")
     connection = duckdb.connect(str(database))
     try:
-        assert connection.execute("SELECT COUNT(*) FROM fact_orders").fetchone()[0] == 8
-        assert connection.execute("SELECT COUNT(*) FROM quality_rejects").fetchone()[0] == 2
-        assert connection.execute("SELECT low_stock_lines FROM operations_kpis").fetchone()[0] == 4
+        assert _one(connection, "SELECT COUNT(*) FROM fact_orders")[0] == 8
+        assert _one(connection, "SELECT COUNT(*) FROM quality_rejects")[0] == 2
+        assert _one(connection, "SELECT low_stock_lines FROM operations_kpis")[0] == 4
     finally:
         connection.close()
 
@@ -109,7 +118,7 @@ def test_rerunning_same_file_is_idempotent_not_duplicating(tmp_path: Path):
     summary_again = run(source, database)
     connection = duckdb.connect(str(database))
     try:
-        total = connection.execute("SELECT COUNT(*) FROM fact_orders").fetchone()[0]
+        total = _one(connection, "SELECT COUNT(*) FROM fact_orders")[0]
     finally:
         connection.close()
     assert total == summary_again.accepted == 8
@@ -136,7 +145,7 @@ def test_second_batch_accumulates_instead_of_replacing_first(tmp_path: Path):
 
     connection = duckdb.connect(str(database))
     try:
-        total = connection.execute("SELECT COUNT(*) FROM fact_orders").fetchone()[0]
+        total = _one(connection, "SELECT COUNT(*) FROM fact_orders")[0]
     finally:
         connection.close()
     assert total == first.accepted * 2
@@ -156,12 +165,10 @@ def test_all_rows_rejected_batch_does_not_crash_kpis(tmp_path: Path):
     summary = run(bad_source, database)
     assert summary.accepted == 0
     assert summary.rejected == 1
-    assert summary.gross_revenue == Decimal("0")
+    assert summary.gross_revenue == Decimal(0)
     connection = duckdb.connect(str(database))
     try:
-        kpi = connection.execute(
-            "SELECT gross_revenue, gross_margin, average_fulfillment_days FROM operations_kpis"
-        ).fetchone()
+        kpi = _one(connection, "SELECT gross_revenue, gross_margin, average_fulfillment_days FROM operations_kpis")
     finally:
         connection.close()
     assert kpi == (0, 0, 0)
@@ -268,8 +275,6 @@ def test_run_is_transactional_on_failure(tmp_path: Path, monkeypatch):
     database = tmp_path / "retail.duckdb"
     run(_write(tmp_path / "a.csv", _line("A1")), database)
 
-    import retail_ops.pipeline as pipeline
-
     real_decimal = pipeline.Decimal
 
     class Boom(Exception):
@@ -292,3 +297,77 @@ def test_run_is_transactional_on_failure(tmp_path: Path, monkeypatch):
     monkeypatch.undo()
     assert _query(database, "SELECT order_id FROM fact_orders") == [("A1",)]
     assert _query(database, "SELECT COUNT(*) FROM quality_rejects") == [(0,)]
+
+
+def test_missing_required_columns_raise_a_clear_error(tmp_path: Path):
+    source = tmp_path / "a.csv"
+    source.write_text("order_id,order_date\nA1,2026-07-01\n", encoding="utf-8")
+    with pytest.raises(ValueError, match=r"Missing columns: .*category.*store_id"):
+        run(source, tmp_path / "retail.duckdb")
+    assert not (tmp_path / "retail.duckdb").exists()
+
+
+def test_header_only_file_loads_nothing_and_builds_views(tmp_path: Path):
+    database = tmp_path / "retail.duckdb"
+    summary = run(_write(tmp_path / "a.csv"), database)
+    assert (summary.accepted, summary.rejected) == (0, 0)
+    assert _query(database, "SELECT order_count FROM operations_kpis") == [(0,)]
+
+
+def test_overlap_keeps_orders_missing_from_the_later_batch(tmp_path: Path):
+    database = tmp_path / "retail.duckdb"
+    run(_write(tmp_path / "a.csv", _line("A1"), _line("A2")), database)
+    # The later file overlaps on A2 only: A1 must survive, A2 is replaced.
+    summary = run(_write(tmp_path / "b.csv", _line("A2", qty="3"), _line("A3")), database)
+    assert _query(database, "SELECT order_id, quantity FROM fact_orders ORDER BY 1") == [
+        ("A1", 2), ("A2", 3), ("A3", 2),
+    ]
+    assert summary.gross_revenue == Decimal("70.00")
+
+
+def test_rejected_resubmission_does_not_erase_the_previous_good_row(tmp_path: Path):
+    database = tmp_path / "retail.duckdb"
+    run(_write(tmp_path / "a.csv", _line("A1")), database)
+    run(_write(tmp_path / "b.csv", _line("A1", qty="-4")), database)
+    assert _query(database, "SELECT order_id, quantity FROM fact_orders") == [("A1", 2)]
+
+
+def test_reorder_queue_tie_on_same_day_is_deterministic(tmp_path: Path):
+    """Two orders for one (store, product) on the same day: the highest
+    order_id wins, whatever order the rows were loaded in."""
+    results = set()
+    for index, lines in enumerate(([("A1", 1), ("A2", 5)], [("A2", 5), ("A1", 1)])):
+        database = tmp_path / f"retail{index}.duckdb"
+        rows = [f"{oid},2026-07-01,ST-01,SKU-1,Home,1,10,4,{stock},9,1" for oid, stock in lines]
+        run(_write(tmp_path / f"in{index}.csv", *rows), database)
+        results.add(tuple(_query(database, "SELECT inventory_on_hand FROM reorder_queue")))
+    assert results == {((5,),)}
+
+
+def test_cli_main_prints_summary(tmp_path: Path, monkeypatch, capsys):
+    source = Path(__file__).parents[1] / "data" / "orders.csv"
+    monkeypatch.setattr(
+        "sys.argv", ["retail_ops.pipeline", "--input", str(source), "--database", str(tmp_path / "r.duckdb")]
+    )
+    pipeline.main()
+    assert "accepted=8 rejected=2 gross_revenue=1666.00 gross_margin=698.50" in capsys.readouterr().out
+
+
+def test_report_escapes_hostile_values_and_keeps_money_exact(tmp_path: Path, monkeypatch, capsys):
+    from retail_ops import report
+
+    database = tmp_path / "retail.duckdb"
+    run(_write(tmp_path / "a.csv", _line("A1", store="<script>x</script>", product="<b>p</b>")), database)
+    # stock 50 > level 2, so force a reorder row too
+    run(_write(tmp_path / "b.csv", "A2,2026-07-02,<i>st</i>,SKU-<u>,Home,1,10.10,4,1,5,1"), database)
+    output = tmp_path / "out" / "dash.html"
+    payload = export_dashboard(database, output)
+    text = output.read_text(encoding="utf-8")
+    assert "<script>x</script>" not in text and "&lt;script&gt;" in text
+    assert "<i>st</i>" not in text and "&lt;i&gt;" in text
+    assert payload["metrics"]["gross_revenue"] == Decimal("30.10")
+    assert '"gross_revenue": "30.10"' in output.with_suffix(".json").read_text(encoding="utf-8")
+
+    monkeypatch.setattr("sys.argv", ["retail_ops.report", "--database", str(database), "--output", str(output)])
+    report.main()
+    assert "stores=2 reorder_items=1" in capsys.readouterr().out

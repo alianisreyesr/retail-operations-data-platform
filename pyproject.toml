@@ -8,5 +8,35 @@ version = "0.1.0"
 requires-python = ">=3.11"
 
 [tool.pytest.ini_options]
-pythonpath = ["src"]
+pythonpath = ["src", "."]
 testpaths = ["tests"]
+
+[tool.coverage.run]
+branch = true
+source = ["src", "dashboard"]
+
+[tool.coverage.report]
+show_missing = true
+fail_under = 85
+
+[tool.ruff]
+line-length = 120
+target-version = "py311"
+extend-exclude = [".venv"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP"]
+# Long inline SQL/HTML strings are intentional in this project.
+ignore = ["E501"]
+
+[tool.mypy]
+python_version = "3.11"
+files = ["src", "dashboard.py", "tests"]
+warn_unused_ignores = true
+warn_redundant_casts = true
+no_implicit_optional = true
+
+[[tool.mypy.overrides]]
+# pandas ships no inline types and pandas-stubs is not a project dependency.
+module = ["pandas", "pandas.*"]
+ignore_missing_imports = true

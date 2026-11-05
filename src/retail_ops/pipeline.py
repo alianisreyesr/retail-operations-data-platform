@@ -13,7 +13,6 @@ from pathlib import Path
 
 import duckdb
 
-
 REQUIRED_COLUMNS = {
     "order_id",
     "order_date",
@@ -68,13 +67,13 @@ def validate(row: dict[str, str | None]) -> list[str]:
         reasons.append("invalid_order_date")
     for field in ("quantity", "inventory_on_hand", "reorder_level", "fulfillment_days"):
         try:
-            if int(row[field]) < 0:
+            if int(_text(row, field)) < 0:
                 reasons.append(f"negative_{field}")
         except (KeyError, TypeError, ValueError):
             reasons.append(f"invalid_{field}")
     for field in ("unit_price", "unit_cost"):
         try:
-            if Decimal(row[field]) < 0:
+            if Decimal(_text(row, field)) < 0:
                 reasons.append(f"negative_{field}")
         except (KeyError, TypeError, InvalidOperation):
             reasons.append(f"invalid_{field}")
@@ -189,7 +188,9 @@ def run(input_path: Path, database_path: Path) -> PipelineSummary:
               SELECT
                 store_id, product_id, category, inventory_on_hand, reorder_level,
                 ROW_NUMBER() OVER (
-                  PARTITION BY store_id, product_id ORDER BY order_date DESC
+                  PARTITION BY store_id, product_id
+                  -- order_id breaks same-day ties deterministically
+                  ORDER BY order_date DESC, order_id DESC
                 ) AS recency_rank
               FROM fact_orders
             ),
@@ -209,12 +210,14 @@ def run(input_path: Path, database_path: Path) -> PipelineSummary:
             FROM latest_snapshot s
             JOIN units u ON u.store_id = s.store_id AND u.product_id = s.product_id
             WHERE s.recency_rank = 1 AND s.inventory_on_hand <= s.reorder_level
-            ORDER BY stock_gap DESC, recent_units DESC
+            ORDER BY stock_gap DESC, recent_units DESC, s.store_id, s.product_id
             """
         )
-        revenue, margin = connection.execute(
+        totals = connection.execute(
             "SELECT COALESCE(SUM(quantity * unit_price), 0), COALESCE(SUM(quantity * (unit_price-unit_cost)), 0) FROM fact_orders"
         ).fetchone()
+        assert totals is not None  # an aggregate query always returns one row
+        revenue, margin = totals
         connection.commit()
     except BaseException:
         connection.rollback()

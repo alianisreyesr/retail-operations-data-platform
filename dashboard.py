@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+from decimal import Decimal
 from pathlib import Path
 
 import duckdb
@@ -10,21 +12,22 @@ import streamlit as st
 
 from retail_ops.pipeline import run
 
-
 ROOT = Path(__file__).parent
-DATABASE = ROOT / "retail_ops.duckdb"
+# RETAIL_OPS_DATABASE lets containers keep the DB on a mounted volume (and tests use a temp file).
+DATABASE = Path(os.environ.get("RETAIL_OPS_DATABASE", ROOT / "retail_ops.duckdb"))
 SOURCE = ROOT / "data" / "orders.csv"
 
 
 def ensure_demo_database() -> Path:
     """Build the deterministic demonstration database when it is absent."""
     if not DATABASE.exists():
+        DATABASE.parent.mkdir(parents=True, exist_ok=True)
         run(SOURCE, DATABASE)
     return DATABASE
 
 
 @st.cache_data
-def load_dashboard_data(database_path: str) -> tuple[dict[str, float | int], pd.DataFrame, pd.DataFrame]:
+def load_dashboard_data(database_path: str) -> tuple[dict[str, Decimal | float | int], pd.DataFrame, pd.DataFrame]:
     """Read decision-ready metrics and tables from DuckDB."""
     connection = duckdb.connect(database_path, read_only=True)
     try:
@@ -32,6 +35,7 @@ def load_dashboard_data(database_path: str) -> tuple[dict[str, float | int], pd.
             "SELECT order_count, gross_revenue, gross_margin, low_stock_lines, "
             "average_fulfillment_days FROM operations_kpis"
         ).fetchone()
+        assert kpi_row is not None  # operations_kpis is an aggregate view: exactly one row
         stores = connection.execute(
             "SELECT store_id, orders, units, revenue, margin, average_fulfillment_days "
             "FROM store_performance ORDER BY revenue DESC"
@@ -40,14 +44,16 @@ def load_dashboard_data(database_path: str) -> tuple[dict[str, float | int], pd.
             "SELECT store_id, product_id, category, inventory_on_hand, reorder_level, recent_units, stock_gap "
             "FROM reorder_queue ORDER BY stock_gap DESC, recent_units DESC"
         ).fetchdf()
-        rejected = connection.execute("SELECT COUNT(*) FROM quality_rejects").fetchone()[0]
+        rejected_row = connection.execute("SELECT COUNT(*) FROM quality_rejects").fetchone()
+        assert rejected_row is not None
+        rejected = rejected_row[0]
     finally:
         connection.close()
 
-    metrics = {
+    metrics: dict[str, Decimal | float | int] = {
         "orders": int(kpi_row[0]),
-        "gross_revenue": float(kpi_row[1]),
-        "gross_margin": float(kpi_row[2]),
+        "gross_revenue": Decimal(kpi_row[1]),
+        "gross_margin": Decimal(kpi_row[2]),
         "low_stock_lines": int(kpi_row[3]),
         "average_fulfillment_days": float(kpi_row[4]),
         "rejected_records": int(rejected),

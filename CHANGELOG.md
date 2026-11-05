@@ -14,6 +14,19 @@ The project follows semantic versioning for public portfolio releases. Version n
 - Docker image runs as a non-root user; added `.dockerignore`
 - Documentation no longer claims raw/dimension tables or reconciliation checks that do not exist
 
+### Changed
+
+- CI now runs `ruff` and `mypy`, declares least-privilege `permissions`, and enforces `--cov-fail-under=85` (branch coverage, including `dashboard.py`)
+- `pytest` moved out of the runtime `requirements.txt` into `requirements-dev.txt`; `streamlit>=1.49` (first release accepting `width="stretch"`) and `pandas>=2.2,<4`
+- Money in the HTML/JSON export and dashboard stays `Decimal` instead of `float`
+- `reorder_queue` breaks same-day ties deterministically (`order_id`) and has a total ordering
+- Dockerfile gains a `HEALTHCHECK`; the DuckDB file lives on the `retail_db` volume (`RETAIL_OPS_DATABASE`), and `./data` is mounted read-only
+- `.gitignore` covers coverage output, egg-info, and ruff/mypy caches; `CONTRIBUTING.md` and `SECURITY.md` expanded
+
+### Added
+
+- Tests for missing columns, header-only files, overlapping batches, same-day ties, CLI entry points, HTML escaping, and the Streamlit dashboard (empty state, filtering)
+
 ## [0.1.0] — 2026-08-27
 
 Version aligned with `pyproject.toml` (previously labelled 1.0.0).

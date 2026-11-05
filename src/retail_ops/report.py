@@ -5,41 +5,47 @@ from __future__ import annotations
 import argparse
 import html
 import json
+from decimal import Decimal
 from pathlib import Path
+from typing import Any
 
 import duckdb
 
 
-def _money(value: float) -> str:
+def _money(value: Decimal | float) -> str:
     return f"${value:,.2f}"
 
 
-def export_dashboard(database_path: Path, output_path: Path) -> dict[str, object]:
+def export_dashboard(database_path: Path, output_path: Path) -> dict[str, Any]:
     connection = duckdb.connect(str(database_path), read_only=True)
     try:
         kpi_row = connection.execute(
             "SELECT order_count, gross_revenue, gross_margin, low_stock_lines, average_fulfillment_days FROM operations_kpis"
         ).fetchone()
+        assert kpi_row is not None  # operations_kpis is an aggregate view: exactly one row
         stores = connection.execute(
             "SELECT store_id, orders, units, revenue, margin, average_fulfillment_days FROM store_performance"
         ).fetchall()
         reorder = connection.execute(
             "SELECT store_id, product_id, category, inventory_on_hand, reorder_level, recent_units, stock_gap FROM reorder_queue"
         ).fetchall()
-        rejected = connection.execute("SELECT COUNT(*) FROM quality_rejects").fetchone()[0]
+        rejected_row = connection.execute("SELECT COUNT(*) FROM quality_rejects").fetchone()
+        assert rejected_row is not None
+        rejected = rejected_row[0]
     finally:
         connection.close()
 
-    metrics = {
+    # Money stays Decimal end to end (serialised as exact strings in the JSON).
+    metrics: dict[str, Decimal | int | float] = {
         "orders": int(kpi_row[0]),
-        "gross_revenue": float(kpi_row[1]),
-        "gross_margin": float(kpi_row[2]),
+        "gross_revenue": Decimal(kpi_row[1]),
+        "gross_margin": Decimal(kpi_row[2]),
         "low_stock_lines": int(kpi_row[3]),
         "average_fulfillment_days": float(kpi_row[4]),
         "rejected_records": int(rejected),
     }
     store_rows = "".join(
-        f"<tr><td>{html.escape(store)}</td><td>{orders}</td><td>{units}</td><td>{_money(float(revenue))}</td><td>{_money(float(margin))}</td><td>{days:.2f} days</td></tr>"
+        f"<tr><td>{html.escape(store)}</td><td>{orders}</td><td>{units}</td><td>{_money(revenue)}</td><td>{_money(margin)}</td><td>{days:.2f} days</td></tr>"
         for store, orders, units, revenue, margin, days in stores
     )
     reorder_rows = "".join(
