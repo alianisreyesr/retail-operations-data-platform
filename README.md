@@ -104,10 +104,6 @@ flowchart TB
 
 This is a portfolio implementation, not a hosted production retail platform. Production use would require managed secrets, orchestration, object storage, access controls, observability, data contracts, recovery procedures, and environment-specific cost and performance testing.
 
-## Target roles
-
-Data Engineer · Analytics Engineer · BI Developer · Data Quality Engineer
-
 ## Portfolio Ecosystem
 
 Related portfolio projects (synthetic data only):
