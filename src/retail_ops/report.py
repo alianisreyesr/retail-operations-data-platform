@@ -1,4 +1,4 @@
-"""Generate a self-contained recruiter-facing operations dashboard."""
+"""Generate a self-contained operations dashboard."""
 
 from __future__ import annotations
 
